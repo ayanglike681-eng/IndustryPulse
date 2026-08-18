@@ -20,6 +20,27 @@ import pandas as pd
 from .db import Database
 
 
+def calculate_csad(price_df: pd.DataFrame) -> pd.DataFrame:
+    """CSAD: 横截面绝对离散度 (GENESIS 迁移).
+
+    输入: price_df 列 = [symbol, trade_date, close_price]
+    CSAD_t = (1/N) * Σ |r_i,t - r_m,t|,  r_m = 行业等权平均收益率
+    低 = 行业共识强; 高 = 分歧大 (可能拐点)
+
+    返回: [trade_date, csad, industry_return, num_stocks]
+    """
+    price_pivot = price_df.pivot(index="trade_date", columns="symbol", values="close_price")
+    returns = price_pivot.pct_change(fill_method=None).dropna()
+    industry_return = returns.mean(axis=1)
+    csad = returns.sub(industry_return, axis=0).abs().mean(axis=1)
+    return pd.DataFrame({
+        "trade_date": csad.index,
+        "csad": csad.values,
+        "industry_return": industry_return.values,
+        "num_stocks": returns.count(axis=1).values,
+    })
+
+
 class IndustryStateMachine:
     """行业周期状态机: 指标 → 健康度 → 四状态."""
 

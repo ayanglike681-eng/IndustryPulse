@@ -11,7 +11,8 @@ env/
 *.db
 *.sqlite
 *.sqlite3
-data/
+data/*
+!data/credit_spread.csv
 examples/*/
 !examples/.gitkeep
 

@@ -54,4 +54,15 @@ python industry_pulse.py --industry=新能源 --start=2020-01-01 --output=./repo
 - **混频处理**:日度市场指标捕捉短期情绪,季度财务确认基本面,前向填充 + 月度聚合对齐
 - **分位数动态阈值**:基于 2020-2024 历史数据计算,配置化,避免主观拍脑袋
 
-详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/VALIDATION.md](docs/VALIDATION.md)。
+## 验证结果
+
+**样本外框架**: 滚动历史分位数 (expanding, min_periods=12), 排除 look-ahead bias.
+
+- **CSAD 信号真实性**: 置换检验 p < 0.0001, 状态持续性 (3.66 月) 显著高于随机噪音 (2.00 月)
+- **周期方向一致性**: 2024-01 碳酸锂暴跌, 模型进 CONTRACTION (MATCH); 但 2023-04 光伏产能过剩暴露时模型仍判 OVH, 滞后约 9 月才转 CON — 价格 momentum 对基本面反应滞后
+- **事件匹配**: ±2 月窗口匹配率 17% (1 MATCH / 2 PARTIAL / 2 MISS), 状态-事件时点对应弱
+- **风险规避价值**: 2020-2026 状态切换策略回撤 -51.1% vs 买入持有 -61.4% (夏普 0.438 vs 0.561, 未跑赢但回撤更小)
+
+**方法论声明**: v1.0 全历史分位数存在 look-ahead bias (事件匹配率虚高至 50%), 已修正为滚动窗口. 修正后事件时点匹配率下降, 但 regime 方向判断仍与基本面方向一致. 状态机定位为**周期描述工具** (判断"现在处于什么周期"), 非事件预测工具.
+
+详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/VALIDATION.md](docs/VALIDATION.md).

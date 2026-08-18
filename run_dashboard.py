@@ -41,9 +41,11 @@ def main():
             fetcher.db.upsert_df(
                 out[["date", "code", "close", "volume", "market_cap"]], "daily_prices"
             )
-        fetcher.fetch_macro()  # Phi CSV 导入
     else:
-        print("[SKIP] 库已有数据, 跳过抓取")
+        print("[SKIP] 库已有行情, 跳过抓取")
+    # 始终重导入 Phi (信用利差), 清旧避免重复
+    fetcher.db.conn.execute("DELETE FROM macro_daily")
+    fetcher.fetch_macro()
     fetcher.db.close()
 
     # 统一从库重读价格 (列名对齐状态机要求)

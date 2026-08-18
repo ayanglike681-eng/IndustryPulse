@@ -179,6 +179,7 @@ class IndustryStateMachine:
         return macro.set_index("date")["credit_spread"].astype(float)
 
     def _save_state(self, monthly: pd.DataFrame):
+        self.db.conn.execute("DELETE FROM industry_state")
         out = monthly[["trade_date", "csad", "phi", "health_score", "state"]].copy()
         out["date"] = pd.to_datetime(out["trade_date"]).dt.strftime("%Y-%m-%d")
         out["health_score"] = out["health_score"].astype(int)

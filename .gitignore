@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# 数据与产物
+*.db
+*.sqlite
+*.sqlite3
+data/
+examples/*/
+!examples/.gitkeep
+
+# 报告输出
+report/
+*.html
+!docs/**/*.html
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store

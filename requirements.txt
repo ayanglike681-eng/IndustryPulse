@@ -1,0 +1,9 @@
+# IndustryPulse 依赖
+akshare>=1.12.0          # A股行情/财务/宏观数据采集
+pandas>=2.0.0             # 数据处理
+numpy>=1.24.0             # 数值计算
+plotly>=5.18.0            # 交互式仪表盘
+statsmodels>=0.14.0       # 统计检验/半马尔可夫估计
+scipy>=1.10.0             # 置换检验/分位数
+pyyaml>=6.0               # 配置文件解析
+# 注: sqlite3 为 Python 标准库, 无需安装

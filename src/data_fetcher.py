@@ -60,17 +60,24 @@ class DataFetcher:
     def fetch_industry_batch(self, stock_list: list = None,
                              start_date: str = None,
                              end_date: str = None) -> pd.DataFrame:
-        """批量抓取, 带进度 + 容错 + 礼貌间隔(0.5s)."""
+        """批量抓取, 带进度 + 容错(>=60交易日过滤) + 礼貌间隔(0.3s)."""
         stock_list = stock_list or self.pool
         all_data = []
+        failed = []
         for i, symbol in enumerate(stock_list):
-            print(f"Fetching {symbol} ({i + 1}/{len(stock_list)})...")
+            print(f"[{i + 1}/{len(stock_list)}] Fetching {symbol}...")
             df = self.fetch_price_data(symbol, start_date, end_date)
-            if not df.empty:
+            if not df.empty and len(df) > 60:  # 至少 60 个交易日
                 all_data.append(df)
-            time.sleep(0.5)  # 礼貌间隔, 避免被封
+            else:
+                failed.append(symbol)
+            time.sleep(0.3)  # 新浪源较友好
+        if failed:
+            print(f"[WARN] 数据不足/失败: {failed}")
         if all_data:
-            return pd.concat(all_data, ignore_index=True)
+            result = pd.concat(all_data, ignore_index=True)
+            print(f"[OK] 成功 {result['symbol'].nunique()} 家, {len(result)} 行")
+            return result
         return pd.DataFrame()
 
     def run(self):

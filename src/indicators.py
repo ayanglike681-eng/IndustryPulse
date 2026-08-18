@@ -28,14 +28,17 @@ def calculate_csad(price_df: pd.DataFrame) -> pd.DataFrame:
     返回 [trade_date, csad, industry_return, num_stocks]
     """
     price_pivot = price_df.pivot(index="trade_date", columns="symbol", values="close_price")
-    returns = price_pivot.pct_change(fill_method=None).dropna()
-    industry_return = returns.mean(axis=1)
-    csad = returns.sub(industry_return, axis=0).abs().mean(axis=1)
+    # 不整行 dropna (会因任一票停牌删掉整交易日, 丢月), 改用 skipna 保留停牌日
+    returns = price_pivot.pct_change(fill_method=None)
+    industry_return = returns.mean(axis=1, skipna=True)
+    csad = returns.sub(industry_return, axis=0).abs().mean(axis=1, skipna=True)
+    # 仅丢弃无效行 (如首行全 NaN)
+    valid = industry_return.notna() & csad.notna()
     return pd.DataFrame({
-        "trade_date": csad.index,
-        "csad": csad.values,
-        "industry_return": industry_return.values,
-        "num_stocks": returns.count(axis=1).values,
+        "trade_date": csad.index[valid],
+        "csad": csad.values[valid],
+        "industry_return": industry_return.values[valid],
+        "num_stocks": returns.count(axis=1).values[valid],
     })
 
 

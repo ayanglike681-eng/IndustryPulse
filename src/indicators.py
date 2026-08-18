@@ -116,26 +116,38 @@ class IndustryStateMachine:
 
     # ============ 混频对齐: 日度 → 月度 ============
     def align_to_monthly(self, daily: pd.DataFrame) -> pd.DataFrame:
-        """日度 → 月度, 用每月最后交易日代表该月. 加 CSAD/Phi 分位数打分."""
+        """日度 → 月度 (resample 不丢月) + 滚动分位数打分 (消 look-ahead).
+
+        resample('ME').last() 自动生成所有月份索引, 不丢月;
+        ffill(limit=2) 填停牌/缺失月; normalize 消 23:59:59 纳秒.
+        分位数用 expanding (截至当月历史), 不用全历史, 消除样本内 look-ahead.
+        """
         df = daily.copy()
         df.index = pd.to_datetime(df.index)
-        df["year_month"] = df.index.to_period("M")
-        monthly = df.groupby("year_month").last()
-        monthly["trade_date"] = monthly.index.to_timestamp(how="end")
+        df = df.sort_index()
+        monthly = df.resample("ME").last()      # 不丢月
+        monthly = monthly.ffill(limit=2)        # 缺失月用前值, 最多连填2月
+        monthly = monthly.dropna()               # 丢开头无效月
+        monthly["trade_date"] = monthly.index.normalize()  # 消纳秒
 
         sc = self.score_cfg
-        # CSAD 分位数打分 (高分化=-1, 低分化=+1)
-        csad_hi = monthly["csad"].quantile(sc["dispersion_score"]["high_quantile"])
-        csad_lo = monthly["csad"].quantile(sc["dispersion_score"]["low_quantile"])
+        min_p = 12  # 滚动窗口最小月数, 不足则 score=0
+        # CSAD 滚动分位数 (高分化=-1, 低分化=+1)
+        csad_hi = monthly["csad"].expanding(min_periods=min_p).quantile(
+            sc["dispersion_score"]["high_quantile"])
+        csad_lo = monthly["csad"].expanding(min_periods=min_p).quantile(
+            sc["dispersion_score"]["low_quantile"])
         monthly["dispersion_score"] = 0
         monthly.loc[monthly["csad"] > csad_hi, "dispersion_score"] = -1
         monthly.loc[monthly["csad"] < csad_lo, "dispersion_score"] = 1
 
-        # Phi 分位数打分 (紧缩=-1, 宽松=+1); 数据缺失则全 0
+        # Phi 滚动分位数 (紧缩=-1, 宽松=+1); 数据缺失则全 0
         monthly["credit_score"] = 0
         if monthly["phi"].abs().sum() > 0:
-            phi_hi = monthly["phi"].quantile(sc["credit_score"]["tight_quantile"])
-            phi_lo = monthly["phi"].quantile(sc["credit_score"]["loose_quantile"])
+            phi_hi = monthly["phi"].expanding(min_periods=min_p).quantile(
+                sc["credit_score"]["tight_quantile"])
+            phi_lo = monthly["phi"].expanding(min_periods=min_p).quantile(
+                sc["credit_score"]["loose_quantile"])
             monthly.loc[monthly["phi"] > phi_hi, "credit_score"] = -1
             monthly.loc[monthly["phi"] < phi_lo, "credit_score"] = 1
         return monthly

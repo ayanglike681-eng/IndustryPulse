@@ -3,7 +3,7 @@
 
 表结构:
     daily_prices   (date, code, close, volume, market_cap)
-    financials     (report_date, code, revenue, net_profit, gross_margin, roe, capex)
+    financials     (report_date, code, revenue, revenue_growth, net_profit, gross_margin, roe, capex)
     macro_daily    (date, credit_spread, vix)        -- 信用利差 / 波动率
     industry_state (date, csad, phi, health_score, state)  -- 计算产物
 """
@@ -23,7 +23,7 @@ class Database:
         self.conn.execute("PRAGMA journal_mode=WAL;")
 
     def init_schema(self):
-        """建表 (若不存在)."""
+        """建表 (若不存在) + 兼容已建表补列."""
         cur = self.conn.cursor()
         cur.executescript(
             """
@@ -34,8 +34,8 @@ class Database:
             );
             CREATE TABLE IF NOT EXISTS financials (
                 report_date TEXT, code TEXT,
-                revenue REAL, net_profit REAL, gross_margin REAL,
-                roe REAL, capex REAL,
+                revenue REAL, revenue_growth REAL, net_profit REAL,
+                gross_margin REAL, roe REAL, capex REAL,
                 PRIMARY KEY (report_date, code)
             );
             CREATE TABLE IF NOT EXISTS macro_daily (
@@ -51,14 +51,24 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_prices_code ON daily_prices(code);
             """
         )
+        # 兼容已建表: 旧 schema 无 revenue_growth 列, 补上
+        cols = {r[1] for r in cur.execute(
+            "PRAGMA table_info(financials)").fetchall()}
+        if "revenue_growth" not in cols:
+            cur.execute("ALTER TABLE financials ADD COLUMN revenue_growth REAL")
         self.conn.commit()
 
-    # ---- 写入 (upsert) ----
+    # ---- 写入 (INSERT OR REPLACE, 处理重复键) ----
     def upsert_df(self, df: pd.DataFrame, table: str):
         if df.empty:
             return
-        df.to_sql(table, self.conn, if_exists="append", index=False)
-        # TODO: 改为 INSERT OR REPLACE 处理重复键
+        cols = list(df.columns)
+        placeholders = ",".join(["?"] * len(cols))
+        sql = (f"INSERT OR REPLACE INTO {table} "
+               f"({','.join(cols)}) VALUES ({placeholders})")
+        self.conn.executemany(
+            sql, df.where(pd.notnull(df), None).values.tolist())
+        self.conn.commit()
 
     # ---- 读取 ----
     def load_prices(self, start=None, end=None) -> pd.DataFrame:
@@ -78,8 +88,7 @@ class Database:
 
     def load_financials(self) -> pd.DataFrame:
         return pd.read_sql(
-            "SELECT * FROM financials ORDER BY report_date, code", self.conn
-        )
+            "SELECT * FROM financials ORDER BY report_date, code", self.conn)
 
     def load_macro(self) -> pd.DataFrame:
         return pd.read_sql(

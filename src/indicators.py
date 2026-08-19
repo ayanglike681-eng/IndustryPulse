@@ -60,7 +60,10 @@ class IndustryStateMachine:
         self.db = Database(cfg["data"]["db_path"])
 
     def run(self, price_df: pd.DataFrame = None) -> pd.DataFrame:
-        """价格 → CSAD/momentum/Phi → 月度健康度 → 四状态(防抖)."""
+        """价格 → CSAD + 营收momentum + Phi → 月度健康度 → 四状态(防抖).
+
+        momentum 优先用营收增速 (基本面, 领先产业景气); 财务缺失时降级价格二阶导.
+        """
         if price_df is None:
             prices = self.db.load_prices()
             price_df = prices.rename(
@@ -68,21 +71,27 @@ class IndustryStateMachine:
             )
             price_df["trade_date"] = pd.to_datetime(price_df["trade_date"])
 
-        # 日度 CSAD
+        # 日度 CSAD + Phi
         csad_df = calculate_csad(price_df).set_index("trade_date")
-        # 日度 momentum (价格二阶导)
-        momentum = self.calculate_momentum(price_df)
-        # Phi (信用利差, 可缺失)
         phi = self._load_phi()
-
-        # 合并日度
-        daily = csad_df.join(momentum.rename("momentum"), how="left")
-        daily = daily.join(phi.rename("phi"), how="left")
-        daily["momentum"] = daily["momentum"].fillna(0)
+        daily = csad_df.join(phi.rename("phi"), how="left")
         daily["phi"] = daily["phi"].ffill().fillna(0)
 
-        # 月度对齐 + 分位数打分
+        # 月度对齐 + 分位数打分 (csad/phi)
         monthly = self.align_to_monthly(daily)
+
+        # momentum: 优先营收增速 (基本面领先), 降级价格二阶导
+        fin = self._load_financials()
+        rev_mom = self.calculate_revenue_momentum(fin)
+        if rev_mom is not None:
+            monthly["momentum"] = rev_mom.reindex(
+                monthly.index, method="ffill").fillna(0)
+            monthly["momentum_source"] = "revenue"
+        else:
+            price_mom = self.calculate_momentum(price_df).resample("ME").last()
+            monthly["momentum"] = price_mom.reindex(
+                monthly.index, method="ffill").fillna(0)
+            monthly["momentum_source"] = "price"
 
         # 综合健康度
         monthly["health_score"] = (
@@ -113,6 +122,37 @@ class IndustryStateMachine:
         # 减速的上涨 → 0 (动量衰减, 过热信号)
         score[(r1 > 0.05) & (r2 < -0.03)] = 0
         return score
+
+    # ============ momentum: 营收增速加速度 (基本面, 优先) ============
+    def calculate_revenue_momentum(self, fin_df: pd.DataFrame) -> pd.Series:
+        """营收增速二阶导 (基本面 momentum, 替代价格).
+
+        行业等权营收增速 → 季度→月度前向填充 → 加速度打分.
+        高增/加速=+1, 负增=-1, 增速放缓=0 (过热预警).
+        """
+        if (fin_df is None or fin_df.empty
+                or "revenue_growth" not in fin_df.columns):
+            return None
+        rg = (fin_df.dropna(subset=["revenue_growth"])
+              .groupby("report_date")["revenue_growth"]
+              .mean().sort_index())
+        if rg.empty:
+            return None
+        rg.index = pd.to_datetime(rg.index)
+        # 季度 → 月度前向填充
+        monthly_rg = rg.resample("ME").last().ffill()
+        d_rg = monthly_rg.diff()  # 增速变化 (二阶导)
+        score = pd.Series(0.0, index=monthly_rg.index)
+        score[monthly_rg > 15] = 1        # 高增速
+        score[monthly_rg < 0] = -1         # 负增长
+        score[(monthly_rg > 0) & (d_rg < -5)] = 0  # 增速放缓 → 过热
+        return score
+
+    def _load_financials(self) -> pd.DataFrame:
+        try:
+            return self.db.load_financials()
+        except Exception:
+            return pd.DataFrame()
 
     # ============ 混频对齐: 日度 → 月度 ============
     def align_to_monthly(self, daily: pd.DataFrame) -> pd.DataFrame:

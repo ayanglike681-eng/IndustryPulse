@@ -12,6 +12,7 @@
     财务数据  营收/净利润/ROE/资本开支  季度  ← 稍后换源探测
 """
 import time
+import numpy as np
 import pandas as pd
 import akshare as ak
 
@@ -92,6 +93,8 @@ class DataFetcher:
             out["date"] = out["date"].dt.strftime("%Y-%m-%d")
             self.db.upsert_df(out[["date", "code", "close", "volume", "market_cap"]],
                               "daily_prices")
+        # 财务 (同花顺源)
+        self.fetch_financials_batch()
         # Phi (CSV 导入)
         self.fetch_macro()
         self.db.close()
@@ -126,8 +129,80 @@ class DataFetcher:
                 columns={"phi": "credit_spread"}), "macro_daily")
         return pd.DataFrame(columns=["date", "credit_spread", "vix"])
 
-    # ---- 财务数据 (稍后换源) ----
+    # ---- 财务数据 (同花顺源 stock_financial_abstract_ths) ----
+    @staticmethod
+    def _cn_amount_to_yuan(s):
+        """'8.67亿'→8.67e8, '5442.58万'→54425800, 失败→NaN."""
+        if not isinstance(s, str):
+            return pd.NA
+        s = s.strip()
+        try:
+            if s.endswith("亿"):
+                return float(s[:-1]) * 1e8
+            if s.endswith("万"):
+                return float(s[:-1]) * 1e4
+            return float(s)
+        except ValueError:
+            return pd.NA
+
+    def fetch_financial_ths(self, symbol: str) -> pd.DataFrame:
+        """同花顺财务摘要. symbol=sz300750. 清洗: False→NaN, %→float, 亿/万→元.
+
+        返回 [report_date, code, revenue, revenue_growth, net_profit, gross_margin, roe]
+        """
+        code = symbol[2:]  # sz300750 → 300750
+        try:
+            df = ak.stock_financial_abstract_ths(symbol=code, indicator="按报告期")
+        except Exception as e:
+            print(f"[ERROR] fin {symbol}: {e}")
+            return pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={
+            "报告期": "report_date", "营业总收入": "revenue",
+            "营业总收入同比增长率": "revenue_growth", "净利润": "net_profit",
+            "净资产收益率": "roe", "销售毛利率": "gross_margin",
+        })
+        # 百分比字段: 去 % 转 float, False→NaN
+        for c in ["revenue_growth", "roe", "gross_margin"]:
+            if c in df.columns:
+                s = df[c].astype(str).str.replace("%", "", regex=False)
+                s = s.replace({"False": np.nan, "nan": np.nan})
+                df[c] = pd.to_numeric(s, errors="coerce")
+        # 金额字段: 亿/万 → 元
+        for c in ["revenue", "net_profit"]:
+            if c in df.columns:
+                df[c] = df[c].map(self._cn_amount_to_yuan)
+        df["code"] = symbol
+        df["report_date"] = pd.to_datetime(df["report_date"])
+        keep = ["report_date", "code", "revenue", "revenue_growth",
+                "net_profit", "gross_margin", "roe"]
+        return df[[c for c in keep if c in df.columns]]
+
+    def fetch_financials_batch(self, stock_list: list = None) -> pd.DataFrame:
+        """批量抓取财务, 带进度 + 容错 + 入库."""
+        stock_list = stock_list or self.pool
+        all_data = []
+        failed = []
+        for i, sym in enumerate(stock_list):
+            print(f"[{i + 1}/{len(stock_list)}] Fin {sym}...")
+            df = self.fetch_financial_ths(sym)
+            if not df.empty and df["revenue_growth"].notna().any():
+                all_data.append(df)
+            else:
+                failed.append(sym)
+            time.sleep(0.3)
+        if failed:
+            print(f"[WARN] 财务失败/无增速: {failed}")
+        if all_data:
+            res = pd.concat(all_data, ignore_index=True)
+            out = res.copy()
+            out["report_date"] = out["report_date"].dt.strftime("%Y-%m-%d")
+            self.db.upsert_df(out, "financials")
+            print(f"[OK] 财务 {out['code'].nunique()} 家, {len(out)} 行入库")
+            return res
+        return pd.DataFrame()
+
     def fetch_financials(self) -> pd.DataFrame:
-        """季度财务. TODO: 新浪/同花顺源探测 (东财源不可用)."""
-        return pd.DataFrame(columns=["report_date", "code", "revenue",
-                                     "net_profit", "gross_margin", "roe", "capex"])
+        """CLI 兼容入口: 批量抓取同花顺财务."""
+        return self.fetch_financials_batch()
